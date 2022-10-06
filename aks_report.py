@@ -15,6 +15,6 @@ with open('files/report.json', "w") as f:
 
     json.dump(reporter.report, f)
 
-reporter.output_html()
+reporter.output_xlsx()
 
 print("Done")

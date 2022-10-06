@@ -142,7 +142,7 @@ class AKSReporter(Reporter):
                 current_version["subscription"] = subscription
         self.report = self.combined.current_versions
 
-    def output_html(self):
+    def output_xlsx(self):
         if not self.report:
             raise ("Generate report dict first by running make_report.")
         count = 0
