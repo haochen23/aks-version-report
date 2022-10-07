@@ -3,6 +3,7 @@ import os
 import json
 import glob
 import pandas as pd
+from collections import OrderedDict
 
 
 def versiontuple(v):
@@ -63,10 +64,49 @@ class JsonCombiner(FileCombiner):
         return self.upgrades
 
 
+class UpgradeStrategy(ABC):
+
+    pass
+
+
+class AKSUpgradeStrategy(UpgradeStrategy):
+
+    @abstractmethod
+    def get_upgrade_path(self, current_version, upgrades, is_outdated: bool):
+        pass
+
+
+class AggressiveAKSUpgradeStrategy(AKSUpgradeStrategy):
+
+    def get_upgrade_path(self, current_version, upgrades, is_outdated: bool):
+        upgrade_path = OrderedDict()
+        version = current_version["k8sversion"]
+        count = 0
+        if is_outdated:
+            version = upgrades["orchestrators"][0]["orchestratorVersion"]
+            upgrade_path[f"Step {count}"] = version
+            count += 1
+        for orchestrator in upgrades["orchestrators"]:
+            if versiontuple(version) < versiontuple(orchestrator["orchestratorVersion"]):
+                upgrade_path[f"Step {count}"] = orchestrator["orchestratorVersion"]
+                count += 1
+                continue
+            if version == orchestrator["orchestratorVersion"]:
+                if not orchestrator["upgrades"]:
+                    # upgrade_path[f"Step {count}"] = "None Available"
+                    break
+                else:
+                    upgrade_path[f"Step {count}"] = orchestrator["upgrades"][-1]["orchestratorVersion"]
+                    version = orchestrator["upgrades"][-1]["orchestratorVersion"]
+                    count += 1
+
+        return upgrade_path
+
+
 class VersionProcessor(ABC):
 
     @abstractmethod
-    def get_next_upgrades(self, current_version, upgrades):
+    def get_next_upgrades(self, current_version, upgrades, upgrade_strategy: AKSUpgradeStrategy):
         pass
 
     @abstractmethod
@@ -79,32 +119,16 @@ class VersionProcessor(ABC):
 
 class AKSVersionProcessor(VersionProcessor):
 
-    def get_next_upgrades(self, current_version, upgrades):
+    def get_next_upgrades(self, current_version, upgrades, upgrade_strategy: AKSUpgradeStrategy):
         version_outdated = self.is_outdated(current_version, upgrades)
-        next_upgrades: list(str) = []
+
+        upgrade_path = upgrade_strategy.get_upgrade_path(
+            current_version, upgrades, is_outdated=version_outdated)
         is_latest = False
 
-        if version_outdated:
-            for upgrade in upgrades["orchestrators"][0]["upgrades"]:
-                next_upgrades.append(upgrade.get("orchestratorVersion"))
-
-        else:
-            for upgrade in upgrades["orchestrators"]:
-                if versiontuple(current_version.get('k8sversion')) == versiontuple(upgrade['orchestratorVersion']):
-                    for up in upgrade["upgrades"]:
-                        next_upgrades.append(up.get("orchestratorVersion"))
-                    break
-                if versiontuple(current_version.get('k8sversion')) < versiontuple(upgrade['orchestratorVersion']):
-                    next_upgrades.append(
-                        upgrade["orchestratorVersion"])
-                    next_upgrades.append("->")
-                    for up in upgrade["upgrades"]:
-                        next_upgrades.append(up.get("orchestratorVersion"))
-                    break
-
-        if len(next_upgrades) == 0:
+        if len(upgrade_path) <= 1:
             is_latest = True
-        return version_outdated, next_upgrades, is_latest, upgrades["orchestrators"]
+        return version_outdated, json.dumps(upgrade_path, indent=4), is_latest
 
     def is_outdated(self, current_version, upgrades) -> bool:
         return versiontuple(current_version.get('k8sversion')) < versiontuple(upgrades["orchestrators"][0]["orchestratorVersion"])
@@ -119,13 +143,13 @@ class Reporter(ABC):
         self.version_processor = version_processor
 
     @abstractmethod
-    def make_report(self):
+    def make_report(self, upgrade_strategy: AKSUpgradeStrategy):
         pass
 
 
 class AKSReporter(Reporter):
 
-    def make_report(self):
+    def make_report(self, upgrade_strategy):
 
         for subscription, clusters in self.combined.current_versions.items():
             if len(clusters) == 0:
@@ -135,10 +159,9 @@ class AKSReporter(Reporter):
                     "Location")]
                 current_version["isOutdated"], \
                     current_version["nextAvailableUpgrades"], \
-                    current_version["isLatest"], \
-                    current_version["fullUpgradePath"] \
+                    current_version["isLatest"] \
                     = self.version_processor.get_next_upgrades(
-                    current_version, upgrade)
+                    current_version, upgrade, upgrade_strategy)
                 current_version["subscription"] = subscription
         self.report = self.combined.current_versions
 

@@ -1,5 +1,4 @@
-import json
-from base import JsonCombiner, AKSReporter, AKSVersionProcessor
+from base import JsonCombiner, AKSReporter, AKSVersionProcessor, AggressiveAKSUpgradeStrategy
 
 
 combined = JsonCombiner(folder_current='files', glob_current="sub_*.json",
@@ -8,12 +7,12 @@ combined = JsonCombiner(folder_current='files', glob_current="sub_*.json",
 processor = AKSVersionProcessor()
 
 reporter = AKSReporter(combined, processor)
-reporter.make_report()
+reporter.make_report(upgrade_strategy=AggressiveAKSUpgradeStrategy())
 
 
-with open('files/report.json', "w") as f:
+# with open('files/report.json', "w") as f:
 
-    json.dump(reporter.report, f)
+#     json.dump(reporter.report, f)
 
 reporter.output_xlsx()
 
