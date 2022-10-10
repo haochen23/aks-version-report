@@ -6,6 +6,16 @@ import pandas as pd
 from collections import OrderedDict
 
 
+class DirectoryNotExist(Exception):
+
+    pass
+
+
+class ReportNotGenerated(Exception):
+
+    pass
+
+
 def versiontuple(v):
     return tuple(map(int, (v.split("."))))
 
@@ -43,7 +53,8 @@ class JsonCombiner(FileCombiner):
     def _read_current(self) -> dict:
 
         if not os.path.exists(self.folder_current):
-            raise (f"Path {self.folder_current} does not exist")
+            raise DirectoryNotExist(
+                f"Path {self.folder_current} does not exist")
 
         for filename in glob.glob(os.path.join(self.folder_current, self.glob_current)):
             with open(filename) as f:
@@ -55,7 +66,8 @@ class JsonCombiner(FileCombiner):
     def _read_upgrades(self) -> dict:
 
         if not os.path.exists(self.folder_upgrades):
-            raise (f"Path {self.folder_upgrades} does not exist")
+            raise DirectoryNotExist(
+                f"Path {self.folder_upgrades} does not exist")
 
         for filename in glob.glob(os.path.join(self.folder_upgrades, self.glob_upgrades)):
             with open(filename) as f:
@@ -81,16 +93,17 @@ class AggressiveAKSUpgradeStrategy(AKSUpgradeStrategy):
     def get_upgrade_path(self, current_version, upgrades, is_outdated: bool):
         upgrade_path = OrderedDict()
         version = current_version["k8sversion"]
-        count = 0
+        count = 1
         if is_outdated:
             version = upgrades["orchestrators"][0]["orchestratorVersion"]
             upgrade_path[f"Step {count}"] = version
             count += 1
         for orchestrator in upgrades["orchestrators"]:
             if versiontuple(version) < versiontuple(orchestrator["orchestratorVersion"]):
-                upgrade_path[f"Step {count}"] = orchestrator["orchestratorVersion"]
+                version = orchestrator["orchestratorVersion"]
+                upgrade_path[f"Step {count}"] = version
+
                 count += 1
-                continue
             if version == orchestrator["orchestratorVersion"]:
                 if not orchestrator["upgrades"]:
                     # upgrade_path[f"Step {count}"] = "None Available"
@@ -100,7 +113,7 @@ class AggressiveAKSUpgradeStrategy(AKSUpgradeStrategy):
                     version = orchestrator["upgrades"][-1]["orchestratorVersion"]
                     count += 1
 
-        return upgrade_path
+        return upgrade_path, version
 
 
 class VersionProcessor(ABC):
@@ -122,13 +135,13 @@ class AKSVersionProcessor(VersionProcessor):
     def get_next_upgrades(self, current_version, upgrades, upgrade_strategy: AKSUpgradeStrategy):
         version_outdated = self.is_outdated(current_version, upgrades)
 
-        upgrade_path = upgrade_strategy.get_upgrade_path(
+        upgrade_path, latest_GA_version = upgrade_strategy.get_upgrade_path(
             current_version, upgrades, is_outdated=version_outdated)
         is_latest = False
 
         if len(upgrade_path) <= 1:
             is_latest = True
-        return version_outdated, json.dumps(upgrade_path, indent=4), is_latest
+        return version_outdated, json.dumps(upgrade_path, indent=4), is_latest, latest_GA_version
 
     def is_outdated(self, current_version, upgrades) -> bool:
         return versiontuple(current_version.get('k8sversion')) < versiontuple(upgrades["orchestrators"][0]["orchestratorVersion"])
@@ -159,7 +172,8 @@ class AKSReporter(Reporter):
                     "Location")]
                 current_version["isOutdated"], \
                     current_version["nextAvailableUpgrades"], \
-                    current_version["isLatest"] \
+                    current_version["isLatest"], \
+                    current_version["latestGAVersion"]\
                     = self.version_processor.get_next_upgrades(
                     current_version, upgrade, upgrade_strategy)
                 current_version["subscription"] = subscription
@@ -167,7 +181,8 @@ class AKSReporter(Reporter):
 
     def output_xlsx(self):
         if not self.report:
-            raise ("Generate report dict first by running make_report.")
+            raise ReportNotGenerated(
+                "Generate report dict first by running make_report.")
         count = 0
         aks_dict = dict()
         subscription_dict = dict()
@@ -176,6 +191,7 @@ class AKSReporter(Reporter):
         is_latest_dict = dict()
         location_dict = dict()
         next_upgrades_dict = dict()
+        latest_GA_dict = dict()
 
         for _, clusters in self.report.items():
             if len(clusters) == 0:
@@ -188,6 +204,7 @@ class AKSReporter(Reporter):
                 is_latest_dict[count] = cluster["isLatest"]
                 location_dict[count] = cluster["Location"]
                 next_upgrades_dict[count] = cluster["nextAvailableUpgrades"]
+                latest_GA_dict[count] = cluster["latestGAVersion"]
                 count += 1
 
         df = pd.DataFrame({"AKS_cluster": aks_dict,
@@ -195,8 +212,9 @@ class AKSReporter(Reporter):
                            "Current Version": current_version_dict,
                            "isOutdated": is_outdated_dict,
                            "isLatest": is_latest_dict,
+                           "latest_GA_Version": latest_GA_dict,
                            "Location": location_dict,
-                           "Next Available Upgrades": next_upgrades_dict})
+                           "Upgrade to Latest": next_upgrades_dict})
         print(df)
 
         writer = pd.ExcelWriter("files/report.xlsx", engine='xlsxwriter')
