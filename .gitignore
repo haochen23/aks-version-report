@@ -2,4 +2,4 @@ files/*.json
 *__pycache__*
 files/*.xlsx
 .vscode*
-.DS_Store
+*.DS_Store/*
