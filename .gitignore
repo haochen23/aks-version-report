@@ -3,3 +3,5 @@ files/*.json
 files/*.xlsx
 .vscode*
 */.DS_Store
+
+scripts/summary_resources.sh
