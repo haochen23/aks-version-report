@@ -1,12 +1,23 @@
 from abc import ABC, abstractmethod
+from ast import Sub
 from importlib import resources
 import os
 import json
 import glob
+from urllib import response
 import pandas as pd
 from collections import OrderedDict
-from dataclasses import dataclass
 from az.cli import az
+from typing import List
+import requests
+from regex import W
+from logger import logger, line
+
+from data_model import Resource, VMResource, SQLVMResource, automation_account_map
+
+
+class VirutalMachineOSTypeError(Exception):
+    pass
 
 
 class FileCombiner(ABC):
@@ -40,36 +51,120 @@ class JsonCombiner(FileCombiner):
                 self.resources.extend(data)
 
 
-@dataclass(frozen=True)
-class Resource:
-    Location: str
-    Name: str
-    Repo: str
-    Type: str
-    ResourceGroup: str
-    Subscription: str
-
-
 class ResourceSummarizer:
 
     def __init__(self, combined_dict: JsonCombiner) -> None:
+        self.subscriptions_list = set(
+            [resource["Subscription"] for resource in combined_dict.resources])
+        self.alerts_list = []
+
+        self._get_alert_list()
+
+        self.all_dsc_status = []
+
+        combined_dict = self._update_resource_alert(combined_dict)
         self.all_resource_list = [
             Resource(**resource) for resource in combined_dict.resources]
-        self.vms = []
-        self.windows_vms = []
-        self.linux_vms = []
+
+        self.windows_vms: List(VMResource) = []
+        self.linux_vms: List(VMResource) = []
         self.sql_vms = []
         self.sql_mi = []
         self.aks = []
         self.azure_sql = []
+
         self.backup_query_exit, self.backup_status = self._get_backup_status()
+
+    def _update_resource_alert(self, combined_dict: JsonCombiner):
+        for resource in combined_dict.resources:
+            resource["alerts"] = []
+            for alert in self.alerts_list:
+                for scope in alert["scopes"]:
+                    if resource["Name"] == scope.split('/')[-1]:
+                        resource["alerts"].append(alert)
+            resource["alerts_count"] = len(resource["alerts"])
+        return combined_dict
+
+    def _get_dsc_status(self):
+        exit_code, result_dict, logs = az(
+            f'account get-access-token --tenant {os.getenv("TENANT_ID")}')
+
+        for subscriptionId, auto_accounts in automation_account_map.items():
+            for rg, accounts in auto_accounts.items():
+                for account in accounts:
+                    r = requests.get(f"https://management.azure.com/subscriptions/{subscriptionId}/resourceGroups/{rg}/providers/Microsoft.Automation/automationAccounts/{account}/nodes?api-version=2019-06-01", headers={
+                                     f"Authorization": f"Bearer {result_dict['accessToken']}"})
+
+                    self.all_dsc_status.extend(r.json()["value"])
 
     def categorize_resources(self):
         for resource in self.all_resource_list:
             if resource.Type == "Microsoft.Compute/virtualMachines":
-                self.vms.append(resource)
+                for backup_query_item in self.backup_status["data"]:
+                    if resource.Name == backup_query_item.get("name") and (backup_query_item.get("backupItemid") == "iaasresourcecontainerv2" or backup_query_item.get("isBackedUp")):
+                        if backup_query_item["osType"].lower() == "windows":
+                            self.windows_vms.append(VMResource(Name=resource.Name, Location=resource.Location,
+                                                               Id=resource.Id,
+                                                               alerts=resource.alerts, alerts_count=resource.alerts_count,
+                                                               Type=resource.Type, Repo=resource.Repo, ResourceGroup=resource.ResourceGroup,
+                                                               Subscription=resource.Subscription, osType=backup_query_item[
+                                                                   "osType"],
+                                                               osName=backup_query_item[
+                                                                   "osName"], osVersion=backup_query_item["osVersion"],
+                                                               isBackedUp=backup_query_item[
+                                                                   "isBackedUp"], lastbackup=backup_query_item["lastbackup"],
+                                                               lastBackup_status=backup_query_item["lastBackup_status"],
+                                                               lastRecoveryPoint=backup_query_item["lastRecoveryPoint"],
+                                                               protection_status=backup_query_item["protection_status"],
+                                                               policy_name=backup_query_item["policy_name"],
+                                                               backupItemid=backup_query_item["backupItemid"],
+                                                               PowerStatus=backup_query_item["PowerStatus"],
+                                                               offer=backup_query_item[
+                                                                   "offer"], publisher=backup_query_item["publisher"],
+                                                               sku=backup_query_item["sku_2"],
+                                                               RSV=backup_query_item["backupItemid"].split("/")[4]))
+                            break
+                        elif backup_query_item["osType"].lower() == "linux":
+                            self.linux_vms.append(VMResource(Name=resource.Name, Location=resource.Location,
+                                                             Id=resource.Id,
+                                                             alerts=resource.alerts, alerts_count=resource.alerts_count,
+                                                             Type=resource.Type, Repo=resource.Repo, ResourceGroup=resource.ResourceGroup,
+                                                             Subscription=resource.Subscription, osType=backup_query_item[
+                                                                 "osType"],
+                                                             osName=backup_query_item[
+                                                                 "osName"], osVersion=backup_query_item["osVersion"],
+                                                             isBackedUp=backup_query_item[
+                                                                 "isBackedUp"], lastbackup=backup_query_item["lastbackup"],
+                                                             lastBackup_status=backup_query_item["lastBackup_status"],
+                                                             lastRecoveryPoint=backup_query_item["lastRecoveryPoint"],
+                                                             protection_status=backup_query_item["protection_status"],
+                                                             policy_name=backup_query_item["policy_name"],
+                                                             backupItemid=backup_query_item["backupItemid"],
+                                                             PowerStatus=backup_query_item["PowerStatus"],
+                                                             offer=backup_query_item["offer"], publisher=backup_query_item["publisher"],
+                                                             sku=backup_query_item["sku_2"],
+                                                             RSV=backup_query_item["backupItemid"].split("/")[4]))
+                            break
+                        else:
+                            raise VirutalMachineOSTypeError(
+                                backup_query_item["osType"])
             elif resource.Type == "Microsoft.SqlVirtualMachine/SqlVirtualMachines":
-                self.sql_vms.append(resource)
+                for backup_query_item in self.backup_status["data"]:
+                    if resource.Name == backup_query_item.get("name"):
+
+                        self.sql_vms.append(SQLVMResource(Location=resource.Location, Name=resource.Name,
+                                                          Repo=resource.Repo, Type=resource.Type, ResourceGroup=resource.ResourceGroup,
+                                                          Subscription=resource.Subscription, Id=resource.Id, alerts=resource.alerts,
+                                                          alerts_count=resource.alerts_count, policy_name=backup_query_item[
+                                                              "policy_name"],
+                                                          protection_status=backup_query_item["protection_status"],
+                                                          lastbackup=backup_query_item["lastbackup"],
+                                                          lastBackup_status=backup_query_item["lastBackup_status"],
+                                                          RSV=backup_query_item["backupItemid"].split(
+                                                              '/')[4],
+                                                          isBackedUp=backup_query_item["isBackedUp"],
+                                                          vmSize=backup_query_item.get("properties").get("hardwareProfile").get('vmSize')))
+                        break
             elif resource.Type == "Microsoft.Sql/managedInstances":
                 self.sql_mi.append(resource)
             elif resource.Type == "Microsoft.Sql/servers":
@@ -103,13 +198,79 @@ class ResourceSummarizer:
 | extend app_tag = tags.App
 | extend description_tag = tags.Description
 | extend AssetName_tag = tags.AssetName
-| project tenantId,location, env_tag, app_tag, description_tag,AssetName_tag, resourceId,name, type, subscriptionName, subscriptionId, resourceGroup, isBackedUp, backupItemid, sku_2, publisher, offer, osType, osVersion, osName, PowerStatus, policy_name, lastBackup_status, protection_status, lastbackup, lastRecoveryPoint
+// | project tenantId,location, env_tag, app_tag, description_tag,AssetName_tag, resourceId,name, type, subscriptionId, resourceGroup, isBackedUp, backupItemid, sku_2, publisher, offer, osType, osVersion, osName, PowerStatus, policy_name, lastBackup_status, protection_status, lastbackup, lastRecoveryPoint
                 """
 
         exit_code, result_dict, logs = az(
             f"graph query -q '{query}' --first 1000")
         print(logs)
         return exit_code, result_dict
+
+    def _get_alert_list(self):
+        for subscription in self.subscriptions_list:
+            exit_code, result_dict, logs = az(
+                f"monitor metrics alert list --subscription {subscription}")
+            self.alerts_list.extend(result_dict)
+
+    def check_windows_vms(self):
+        logger.info(line)
+        logger.info("Processing Windoes VMs")
+        if len(self.windows_vms) < 1:
+            logger.info("No windows VMs in the listed resource groups")
+            return
+
+        self._get_dsc_status()
+        for vm in self.windows_vms:
+            logger.info(f"Processsing {vm.Name}")
+            exit_code, result_dict, logs = az(
+                f"vm show -n '{vm.Name}' -g {vm.ResourceGroup} --subscription {vm.Subscription}")
+
+            vm.Size = result_dict.get("hardwareProfile").get("vmSize")
+            vm.extentions = result_dict.get("resources")
+            vm.dsc_status = None
+            vm.dsc_compliant = None
+            for dsc_node in self.all_dsc_status:
+                if dsc_node["id"].split('/')[-1] == vm.Name:
+                    vm.dsc_status = dsc_node["properties"]['status']
+                    vm.dsc_compliant = dsc_node["properties"]['status'] == 'Compliant'
+
+    def check_linux_vms(self):
+
+        logger.info(line)
+        logger.info("Processing Linux VMs")
+        if len(self.linux_vms) < 1:
+            logger.info("No Linux VMs in the listed resource groups")
+            return
+
+        for vm in self.linux_vms:
+            logger.info(f"Processing {vm.Name}")
+            exit_code, result_dict, logs = az(
+                f"vm show -n '{vm.Name}' -g {vm.ResourceGroup} --subscription {vm.Subscription}")
+
+            vm.Size = result_dict.get("hardwareProfile").get("vmSize")
+            vm.extentions = result_dict.get("resources")
+            # dcr linux_to_sec
+            vm.dcr_sec = None
+            # dcr linux_to_shd
+            vm.dcr_shd = None
+
+            exit_code, result_dict, logs = az(
+                f"monitor data-collection rule association list --resource {vm.Id}")
+
+            if not result_dict:
+                return
+            for dcr in result_dict:
+                if not dcr.get("dataCollectionRuleId"):
+                    continue
+                if dcr.get("dataCollectionRuleId").split('/')[-1].lower() == 'linux-to-sec':
+                    vm.dcr_sec = True
+                elif dcr.get("dataCollectionRuleId").split('/')[-1].lower() == 'linux-to-shd':
+                    vm.dcr_shd = True
+                else:
+                    logger.warn(
+                        f"{vm.Name} not connected to either 'linux-to-sec` or 'linux-to-shd'.")
+
+    # def check_sql_vms(self):
 
     def output_xlsx(self):
         name_dict = dict()
@@ -133,7 +294,7 @@ class ResourceSummarizer:
 
         df = pd.DataFrame({"NAME": name_dict,
                            "TYPE": type_dict,
-                           "LOCATION": location_dict,
+                          "LOCATION": location_dict,
                            "SUBSCRIPTION": subscription_dict,
                            "RESOURCEGROUP": rg_dict,
                            "REPO(TAG)": repo_tag_dict})
