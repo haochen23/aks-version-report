@@ -8,7 +8,7 @@ subscription=$(az account subscription show --id $2 --query "displayName" | tr -
 for i in ${1//,/ }
 do
     # call your procedure/other scripts here below
-    echo $(az resource list --resource-group $i --subscription $2 --query '[].{Name:name, Type:type, Location:location, Repo:tags.Repo}' --subscription $2) \
+    echo $(az resource list --resource-group $i --subscription $2 --query '[].{Name:name, Type:type, Location:location, Repo:tags.Repo, Id:id}' --subscription $2) \
   > files/${subscription}__${i}.json
 done
 

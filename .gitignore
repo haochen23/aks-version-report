@@ -5,3 +5,4 @@ files/*.xlsx
 */.DS_Store
 
 scripts/summary_resources.sh
+*.log
