@@ -11,9 +11,12 @@ from az.cli import az
 from typing import List
 import requests
 from regex import W
-from logger import logger, line
+from logger import get_logger, line
 
 from data_model import Resource, VMResource, SQLVMResource, automation_account_map
+
+
+logger = get_logger(name=__name__)
 
 
 class VirutalMachineOSTypeError(Exception):
@@ -92,10 +95,15 @@ class ResourceSummarizer:
         for subscriptionId, auto_accounts in automation_account_map.items():
             for rg, accounts in auto_accounts.items():
                 for account in accounts:
-                    r = requests.get(f"https://management.azure.com/subscriptions/{subscriptionId}/resourceGroups/{rg}/providers/Microsoft.Automation/automationAccounts/{account}/nodes?api-version=2019-06-01", headers={
-                                     f"Authorization": f"Bearer {result_dict['accessToken']}"})
+                    with requests.Session() as s:
+                        r = s.get(f"https://management.azure.com/subscriptions/{subscriptionId}/resourceGroups/{rg}/providers/Microsoft.Automation/automationAccounts/{account}/nodes?&$top=2000&api-version=2019-06-01", headers={
+                            f"Authorization": f"Bearer {result_dict['accessToken']}"})
 
-                    self.all_dsc_status.extend(r.json()["value"])
+                        self.all_dsc_status.extend(r.json()["value"])
+                        while r.json().get("nextLink"):
+                            r = s.get(r.json().get("nextLink"), headers={
+                                f"Authorization": f"Bearer {result_dict['accessToken']}"})
+                            self.all_dsc_status.extend(r.json()["value"])
 
     def categorize_resources(self):
         for resource in self.all_resource_list:
@@ -230,9 +238,11 @@ class ResourceSummarizer:
             vm.dsc_status = None
             vm.dsc_compliant = None
             for dsc_node in self.all_dsc_status:
-                if dsc_node["id"].split('/')[-1] == vm.Name:
+                if dsc_node["name"].lower() == vm.Name.lower():
                     vm.dsc_status = dsc_node["properties"]['status']
                     vm.dsc_compliant = dsc_node["properties"]['status'] == 'Compliant'
+                    if vm.dsc_compliant:
+                        break
 
     def check_linux_vms(self):
 

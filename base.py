@@ -237,4 +237,4 @@ class AKSReporter(Reporter):
                                "Upgrades": upgrades_dict})
             df.to_excel(writer, sheet_name=f"{location}_upgrades", index=False)
 
-        writer.save()
+        writer.close()

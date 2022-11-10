@@ -1,14 +1,24 @@
 from data_model import VMResource, Resource
 from summary_base import ResourceSummarizer
-from logger import logger, line
+from logger import get_logger, line
 
 line2 = "****************************************************"
+logger = get_logger(name=__name__)
 
 
 class SummaryReporter:
 
     def __init__(self, rs: ResourceSummarizer) -> None:
         self.rs = rs
+
+    def report_vm_list(self):
+        logger.info(line)
+        logger.info("Printing VMs name list")
+        logger.info(line)
+        for vm in self.rs.windows_vms:
+            logger.info(f"{vm.Name}")
+        for vm in self.rs.linux_vms:
+            logger.info(f"{vm.Name}")
 
     def report_windows_vms(self):
         if len(self.rs.windows_vms) < 1:
@@ -90,6 +100,7 @@ class SummaryReporter:
             self._report_resource_general(resource=aks)
 
     def report(self):
+        self.report_vm_list()
         self.report_windows_vms()
         self.report_linux_vms()
         self.report_sql_vms()

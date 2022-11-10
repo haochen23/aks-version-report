@@ -1,8 +1,7 @@
 from summary_base import JsonCombiner, ResourceSummarizer
 from summary_reporter import SummaryReporter
 import logger
-print(logger.logger)
-logger.logger.error("fuck")
+
 
 full_list = JsonCombiner(folder_path="./files")
 resource_summary = ResourceSummarizer(combined_dict=full_list)

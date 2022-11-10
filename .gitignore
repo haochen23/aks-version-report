@@ -6,3 +6,5 @@ files/*.xlsx
 
 scripts/summary_resources.sh
 *.log
+*.csv
+files/*.csv
